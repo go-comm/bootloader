@@ -18,19 +18,24 @@ const (
 	structTagAutoVal = "auto"
 )
 
-func newBootloader() *bootloader {
+func newBootloader() Bootloader {
 	loader := new(bootloader)
 	ctx := context.Background()
 	ctx, loader.cancel = context.WithCancel(context.Background())
 	loader.g, _ = errgroup.WithContext(ctx)
 	loader.props = newProperties(propNamePrefix)
-	loader.showLog = true
+	loader.showLog = false
 	return loader
 }
 
 type Bootloader interface {
-	AddModuler(string, Moduler) error
-	AddModulerFromType(Moduler) error
+	Get(name string) (interface{}, error)
+	Add(name string, x interface{}) error
+	AddFromType(x interface{}) error
+	SetProperties(data interface{}) error
+	GetProperty(name string) (interface{}, bool)
+	Remove(name string)
+	RemoveFromType(x interface{})
 	Launch() error
 	Shutdown() error
 	ShowLog(bool)
@@ -44,7 +49,7 @@ type bootloader struct {
 	props   *properties
 }
 
-func (loader *bootloader) GetModuler(name string) (Moduler, error) {
+func (loader *bootloader) Get(name string) (interface{}, error) {
 	v, ok := loader.data.Load(name)
 	if !ok {
 		panic(fmt.Errorf("[Bootloader] GetModuler %s not found", name))
@@ -56,34 +61,47 @@ func (loader *bootloader) GetModuler(name string) (Moduler, error) {
 	return wrap.m, nil
 }
 
-func (loader *bootloader) ExtractModuler(m Moduler) (Moduler, error) {
-	var err error
-	var ok bool
-	var getter ModulerGetter
-	for {
-		if getter, ok = m.(ModulerGetter); !ok {
-			break
-		}
-		m, err = getter.GetModuler()
+func (loader *bootloader) extractModuler(x interface{}) (interface{}, error) {
+	switch v := x.(type) {
+	case Provider:
+		m, err := v.GetModuler()
 		if err != nil {
 			return nil, err
 		}
-		if getter == m {
-			break
+		if m == x {
+			return m, nil
 		}
+		return loader.extractModuler(m)
+	case ProviderFunc:
+		return v()
+	case func() (interface{}, error):
+		return v()
+	case func() interface{}:
+		return v(), nil
+	default:
+		break
 	}
-	return m, nil
+	return x, nil
 }
 
-func (loader *bootloader) AddModuler2(name string, fn func() (Moduler, error)) error {
-	return loader.AddModuler(name, ModulerGetterFunc(fn))
-}
-
-func (loader *bootloader) AddModuler(name string, m Moduler) error {
-	m, err := loader.ExtractModuler(m)
+func (loader *bootloader) AddFromType(x interface{}) error {
+	m, err := loader.extractModuler(x)
 	if err != nil {
 		panic(err)
 	}
+	name := reflect.TypeOf(m).String()
+	return loader.add(typeNamePrefix+name, m)
+}
+
+func (loader *bootloader) Add(name string, x interface{}) error {
+	m, err := loader.extractModuler(x)
+	if err != nil {
+		panic(err)
+	}
+	return loader.add(name, m)
+}
+
+func (loader *bootloader) add(name string, m Moduler) error {
 	wrap := &wrappedModuler{name, m, reflect.ValueOf(m), stateAddingTO, sync.NewCond(&sync.Mutex{})}
 	loader.data.Store(name, wrap)
 
@@ -144,19 +162,6 @@ func (loader *bootloader) inject(name string, refv reflect.Value) {
 	}
 }
 
-func (loader *bootloader) AddModulerFromType2(fn func() (Moduler, error)) error {
-	return loader.AddModulerFromType(ModulerGetterFunc(fn))
-}
-
-func (loader *bootloader) AddModulerFromType(m Moduler) error {
-	m, err := loader.ExtractModuler(m)
-	if err != nil {
-		panic(err)
-	}
-	name := reflect.TypeOf(m).String()
-	return loader.AddModuler(typeNamePrefix+name, m)
-}
-
 func (loader *bootloader) SetProperties(data interface{}) error {
 	loader.props.set(data)
 	return nil
@@ -173,13 +178,17 @@ func (loader *bootloader) ShowLog(b bool) {
 	loader.showLog = b
 }
 
-func (loader *bootloader) RemoveModuler(name string) {
+func (loader *bootloader) Remove(name string) {
 	loader.data.Delete(name)
 }
 
-func (loader *bootloader) RemoveModulerFromType(m Moduler) {
+func (loader *bootloader) RemoveFromType(x interface{}) {
+	m, err := loader.extractModuler(x)
+	if err != nil {
+		panic(err)
+	}
 	name := reflect.TypeOf(m).String()
-	loader.RemoveModuler(name)
+	loader.Remove(typeNamePrefix + name)
 }
 
 func (loader *bootloader) Launch() (err error) {

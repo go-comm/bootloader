@@ -4,18 +4,31 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"runtime"
 
 	"github.com/go-comm/bootloader"
 )
 
 type User struct {
 	Username string
-	Role     string
+}
+type RuntimeInfo struct {
+	GOOS    string
+	Version string
+	NumCPU  int
+}
+
+func FuncRuntimeInfo() (interface{}, error) {
+
+	return &RuntimeInfo{
+		GOOS:    runtime.GOOS,
+		Version: runtime.Version(),
+		NumCPU:  runtime.NumCPU(),
+	}, nil
 }
 
 type UserService struct {
-	User        *User
-	RoleService *RoleService `bloader:"auto"`
+	User *User
 }
 
 func (s *UserService) OnCreate() {
@@ -25,29 +38,18 @@ func (s *UserService) OnCreate() {
 }
 
 func (s *UserService) GetUser() *User {
-	s.User.Role = s.RoleService.GetRole()
 	log.Printf("%+v", s.User)
 	return s.User
 }
 
-type RoleService struct {
-	Role string
-}
-
-func (s *RoleService) OnCreate() {
-	s.Role = "admin"
-}
-
-func (s *RoleService) GetRole() string {
-	return s.Role
-}
-
 type Server struct {
 	UserService *UserService `bloader:"user-service"`
+	RuntimeInfo *RuntimeInfo `bloader:"auto"`
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.UserService.GetUser())
+	json.NewEncoder(w).Encode(s.RuntimeInfo)
 }
 
 func (s *Server) OnStart() {
@@ -57,10 +59,9 @@ func (s *Server) OnStart() {
 }
 
 func main() {
-
-	bootloader.AddModulerFromType(new(RoleService))
-	bootloader.AddModuler("user-service", new(UserService))
-	bootloader.AddModulerFromType(new(Server))
+	bootloader.AddFromType(FuncRuntimeInfo)
+	bootloader.Add("user-service", new(UserService))
+	bootloader.AddFromType(new(Server))
 
 	bootloader.Launch()
 }

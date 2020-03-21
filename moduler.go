@@ -76,14 +76,14 @@ func (wrap *wrappedModuler) destroy(loader *bootloader) {
 
 }
 
-type ModulerGetter interface {
-	GetModuler() (Moduler, error)
+type Provider interface {
+	GetModuler() (interface{}, error)
 }
 
-type ModulerGetterFunc func() (Moduler, error)
+type ProviderFunc func() (interface{}, error)
 
-func (fn ModulerGetterFunc) GetModuler() (Moduler, error) {
-	return fn()
+func (f ProviderFunc) GetModuler() (interface{}, error) {
+	return f()
 }
 
 type Moduler interface {
