@@ -136,7 +136,7 @@ func (loader *bootloader) inject(name string, refv reflect.Value) {
 			if props == nil {
 				panic(fmt.Errorf("[Bootloader] props not set"))
 			}
-			if prop := props.value(propNamePrefix + shell); prop != zero {
+			if prop := props.value(shell); prop != zero {
 				fv.Set(prop)
 				fset = true
 			}
