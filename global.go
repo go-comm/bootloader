@@ -14,6 +14,10 @@ func AddFromType(x interface{}) error {
 	return global.AddFromType(x)
 }
 
+func AddByAuto(x interface{}) error {
+	return global.AddByAuto(x)
+}
+
 func SetProperties(data interface{}) error {
 	return global.SetProperties(data)
 }
@@ -22,12 +26,8 @@ func GetProperty(name string) (interface{}, bool) {
 	return global.GetProperty(name)
 }
 
-func Remove(name string) {
-	global.Remove(name)
-}
-
-func RemoveFromType(x interface{}) {
-	global.RemoveFromType(x)
+func MuestGetProperty(name string) interface{} {
+	return global.MuestGetProperty(name)
 }
 
 func Launch() error {
