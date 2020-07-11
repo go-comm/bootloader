@@ -3,7 +3,6 @@ package bootloader
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -36,14 +35,19 @@ var (
 
 func newBootloader() Bootloader {
 	loader := new(bootloader)
+	loader.log = &logger{}
+	loader.log.Show(envBLoaderLogEnabled)
 	ctx := context.Background()
 	ctx, loader.cancel = context.WithCancel(context.Background())
 	loader.errg, _ = errgroup.WithContext(ctx)
 	loader.props = newProperties(propNamePrefix)
-	loader.showLog = envBLoaderLogEnabled
-	loader.g = newGroup()
-	loader.g.beforeInjectHook = loader.beforeInjectHook
-	loader.g.afterInjectHook = loader.afterInjectHook
+	loader.g = newGroup(loader.OnBeforeAdding,
+		loader.OnAfterAdded)
+	loader.g.log = loader.log
+	loader.h = newInjectionHandler(loader.g,
+		loader.OnBeforeInjectFieldHook,
+		loader.OnAfterInjectFieldHook,
+		loader.OnInjectCompleted)
 	return loader
 }
 
@@ -52,24 +56,29 @@ type Bootloader interface {
 	Add(name string, x interface{}) error
 	AddFromType(x interface{}) error
 	AddByAuto(x interface{}) error
+	SetIgnores(name ...string) error
 	SetProperties(data interface{}) error
 	GetProperty(name string) (interface{}, bool)
 	MuestGetProperty(name string) interface{}
 	Launch() error
+	TestUnit(fn func() error) error
+	Run() error
+	Wait() error
 	Shutdown() error
 	ShowLog(bool)
 }
 
 type bootloader struct {
-	showLog bool
-	cancel  context.CancelFunc
-	errg    *errgroup.Group
-	props   *properties
-	g       *group
+	cancel context.CancelFunc
+	errg   *errgroup.Group
+	props  *properties
+	g      *group
+	h      *injectionHandler
+	log    Logger
 }
 
 func (loader *bootloader) Get(name string) (interface{}, error) {
-	m := loader.g.findByName(name)
+	m := loader.g.FindByName(name)
 	if m == nil {
 		return nil, fmt.Errorf("bootloader: Module %s not found", name)
 	}
@@ -120,7 +129,7 @@ func (loader *bootloader) AddByAuto(x interface{}) error {
 		panic(err)
 	}
 	wrapped := newWrappedModule(m)
-	loader.log("bootloader: AddByType", wrapped.Path())
+	wrapped.log = loader.log
 	loader.g.AddByType(wrapped)
 	return nil
 }
@@ -131,9 +140,13 @@ func (loader *bootloader) Add(name string, x interface{}) error {
 		panic(err)
 	}
 	wrapped := newWrappedModule(m)
-	loader.log("bootloader: AddByName", wrapped.Path(), "named:", name)
+	wrapped.log = loader.log
 	loader.g.AddByName(name, wrapped)
 	return nil
+}
+
+func (loader *bootloader) SetIgnores(name ...string) error {
+	return loader.g.SetIgnores(name...)
 }
 
 func (loader *bootloader) SetProperties(data interface{}) error {
@@ -156,14 +169,38 @@ func (loader *bootloader) MuestGetProperty(name string) interface{} {
 }
 
 func (loader *bootloader) ShowLog(b bool) {
-	loader.showLog = b
+	loader.log.Show(b)
 }
 
-func (loader *bootloader) beforeInjectHook(m *wrappedModule, f *wrappedField) {
+func (loader *bootloader) OnBeforeAdding(m *wrappedModule) {
+	m.Create()
+}
+
+func (loader *bootloader) OnAfterAdded(m *wrappedModule) {
+	if len(m.Fields()) <= 0 {
+		loader.doMount(m)
+		return
+	}
+	loader.h.Inject(m)
+}
+
+func (loader *bootloader) doMount(m *wrappedModule) {
+	m.Mount()
+	loader.errg.Go(func() error {
+		m.Start()
+		return nil
+	})
+}
+
+func (loader *bootloader) OnInjectCompleted(m *wrappedModule) {
+	loader.doMount(m)
+}
+
+func (loader *bootloader) OnBeforeInjectFieldHook(m *wrappedModule, f *wrappedField) {
 	// nothing
 }
 
-func (loader *bootloader) afterInjectHook(m *wrappedModule, f *wrappedField) {
+func (loader *bootloader) OnAfterInjectFieldHook(m *wrappedModule, f *wrappedField) {
 	tag := f.tag
 	if len(tag) > 0 && tag[0] == '$' {
 		loader.injectProperty(m, f)
@@ -183,54 +220,52 @@ func (loader *bootloader) injectProperty(m *wrappedModule, f *wrappedField) {
 	}
 	if prop := props.value(shell); prop != zero {
 		f.SetValue(prop)
-		loader.log("bootloader: setprop", m.Path(), "FieldName:", f.name)
+		loader.log.Println("bootloader: setprop", m.Path(), "FieldName:", f.name)
 	}
 }
 
 func (loader *bootloader) Launch() (err error) {
+	err = loader.Run()
+	if err != nil {
+		return
+	}
+	return loader.Wait()
+}
+
+func (loader *bootloader) TestUnit(fn func() error) (err error) {
+	return loader.run(fn)
+}
+
+func (loader *bootloader) Run() (err error) {
+	return loader.run(nil)
+}
+
+func (loader *bootloader) run(fn func() error) (err error) {
 
 	// inject
-	loader.g.InjectAll()
+	loader.h.InjectAll()
 
 	// verify all module
-	loader.g.Verify()
+	loader.h.Verify()
 
-	// create
-	for _, m := range loader.g.List() {
-		creater, _ := m.rv.Interface().(OnCreater)
-		if creater != nil {
-			loader.errg.Go(func() error {
-				loader.logf("bootloader: create %s begin", m.Path())
-				creater.OnCreate()
-				loader.logf("bootloader: create %s end", m.Path())
-				return nil
-			})
+	// for test function
+	if fn != nil {
+		err := fn()
+		if err != nil {
+			panic(fmt.Sprintf("bootloader: %v", err))
 		}
 	}
-	loader.errg.Wait()
+	return nil
+}
 
-	// start
-	for _, m := range loader.g.List() {
-		starter, _ := m.rv.Interface().(OnStarter)
-		if starter != nil {
-			loader.errg.Go(func() error {
-				loader.logf("bootloader: start %s begin", m.Path())
-				starter.OnStart()
-				loader.logf("bootloader: start %s end", m.Path())
-				return nil
-			})
-		}
-	}
+func (loader *bootloader) Wait() (err error) {
 	loader.errg.Wait()
-
 	// destroy
 	for _, m := range loader.g.List() {
 		destroyer, _ := m.rv.Interface().(OnDestroyer)
 		if destroyer != nil {
 			loader.errg.Go(func() error {
-				loader.logf("bootloader: destory %s begin", m.Path())
 				destroyer.OnDestroy()
-				loader.logf("bootloader: destory %s end", m.Path())
 				return nil
 			})
 		}
@@ -243,16 +278,4 @@ func (loader *bootloader) Shutdown() error {
 		loader.cancel()
 	}
 	return nil
-}
-
-func (loader *bootloader) log(v ...interface{}) {
-	if loader.showLog {
-		log.Println(v...)
-	}
-}
-
-func (loader *bootloader) logf(format string, v ...interface{}) {
-	if loader.showLog {
-		log.Printf(format, v...)
-	}
 }

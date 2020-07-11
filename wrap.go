@@ -4,13 +4,26 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
+)
+
+const (
+	statusInitial int32 = iota
+	statusCreating
+	statusCreated
+	statusMounting
+	statusMounted
+	statusStarting
+	statusStarted
+	statusDestroying
+	statusDestroyed
 )
 
 func newWrappedModule(i interface{}) *wrappedModule {
 	m := &wrappedModule{}
 	m.rv = reflect.ValueOf(i)
 	m.rt = m.rv.Type()
-
+	m.status = statusInitial
 	m.travelFields()
 	return m
 }
@@ -34,6 +47,8 @@ type wrappedModule struct {
 	rt       reflect.Type
 	rv       reflect.Value
 	fields   []*wrappedField
+	status   int32
+	log      Logger
 }
 
 func (m *wrappedModule) Fields() []*wrappedField {
@@ -102,4 +117,56 @@ func (m *wrappedModule) Path() string {
 		rt = rt.Elem()
 	}
 	return rt.PkgPath() + "." + rt.Name()
+}
+
+func (m *wrappedModule) Create() {
+	if !atomic.CompareAndSwapInt32(&m.status, statusInitial, statusCreating) {
+		panic(fmt.Errorf("bootloader: Unable to create Module %s, status %d expected %d", m.Path(), atomic.LoadInt32(&m.status), statusInitial))
+	}
+	creater, _ := m.rv.Interface().(OnCreater)
+	if creater != nil {
+		m.log.Printf("bootloader: create %s begin", m.Path())
+		creater.OnCreate()
+		m.log.Printf("bootloader: create %s end", m.Path())
+	}
+	atomic.StoreInt32(&m.status, statusCreated)
+}
+
+func (m *wrappedModule) Mount() {
+	if !atomic.CompareAndSwapInt32(&m.status, statusCreated, statusMounting) {
+		panic(fmt.Errorf("bootloader: Unable to mount Module %s, status %d expected %d", m.Path(), atomic.LoadInt32(&m.status), statusCreated))
+	}
+	mounter, _ := m.rv.Interface().(OnMounter)
+	if mounter != nil {
+		m.log.Printf("bootloader: mount %s begin", m.Path())
+		mounter.OnMount()
+		m.log.Printf("bootloader: mount %s end", m.Path())
+	}
+	atomic.StoreInt32(&m.status, statusMounted)
+}
+
+func (m *wrappedModule) Start() {
+	if !atomic.CompareAndSwapInt32(&m.status, statusMounted, statusStarting) {
+		panic(fmt.Errorf("bootloader: Unable to start Module %s, status %d expected %d", m.Path(), atomic.LoadInt32(&m.status), statusMounted))
+	}
+	starter, _ := m.rv.Interface().(OnStarter)
+	if starter != nil {
+		m.log.Printf("bootloader: start %s begin", m.Path())
+		starter.OnStart()
+		m.log.Printf("bootloader: start %s end", m.Path())
+	}
+	atomic.StoreInt32(&m.status, statusStarted)
+}
+
+func (m *wrappedModule) Destroy() {
+	if !atomic.CompareAndSwapInt32(&m.status, statusStarted, statusDestroying) {
+		panic(fmt.Errorf("bootloader: Unable to destroy Module %s, status %d expected %d", m.Path(), atomic.LoadInt32(&m.status), statusStarted))
+	}
+	destroyer, _ := m.rv.Interface().(OnDestroyer)
+	if destroyer != nil {
+		m.log.Printf("bootloader: destroy %s begin", m.Path())
+		destroyer.OnDestroy()
+		m.log.Printf("bootloader: destroy %s end", m.Path())
+	}
+	atomic.StoreInt32(&m.status, statusDestroyed)
 }

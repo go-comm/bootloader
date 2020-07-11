@@ -7,6 +7,10 @@ type OnCreater interface {
 	OnCreate()
 }
 
+type OnMounter interface {
+	OnMount()
+}
+
 type OnDestroyer interface {
 	OnDestroy()
 }

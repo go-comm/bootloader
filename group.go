@@ -3,39 +3,95 @@ package bootloader
 import (
 	"fmt"
 	"reflect"
+	"sync"
 )
 
-func newGroup() *group {
+func newGroup(OnBeforeAdding,
+	OnAfterAdded func(*wrappedModule)) *group {
 	return &group{
-		namedDict: make(map[string]*wrappedModule),
-		dict:      make([]*wrappedModule, 0, 15),
+		namedDict:      make(map[string]*wrappedModule),
+		dict:           make([]*wrappedModule, 0, 15),
+		ignores:        make(map[string]struct{}),
+		OnBeforeAdding: OnBeforeAdding,
+		OnAfterAdded:   OnAfterAdded,
 	}
 }
 
 type group struct {
-	namedDict        map[string]*wrappedModule
-	dict             []*wrappedModule
-	afterInjectHook  func(m *wrappedModule, f *wrappedField)
-	beforeInjectHook func(m *wrappedModule, f *wrappedField)
+	namedDict      map[string]*wrappedModule
+	dict           []*wrappedModule
+	ignores        map[string]struct{}
+	mutex          sync.RWMutex
+	OnBeforeAdding func(*wrappedModule)
+	OnAfterAdded   func(*wrappedModule)
+	log            Logger
+}
+
+func (g *group) SetIgnores(name ...string) error {
+	g.mutex.Lock()
+	for i := len(name) - 1; i >= 0; i-- {
+		g.ignores[name[i]] = struct{}{}
+	}
+	g.mutex.Unlock()
+	return nil
 }
 
 func (g *group) AddByName(name string, m *wrappedModule) {
+	g.mutex.RLock()
+	_, ignore := g.ignores[name]
+	g.mutex.RUnlock()
+	if ignore {
+		return
+	}
+	if g.OnBeforeAdding != nil {
+		g.OnBeforeAdding(m)
+	}
+	g.mutex.Lock()
 	if _, ok := g.namedDict[name]; ok {
+		g.mutex.Unlock()
 		panic(fmt.Errorf("bootloader: %s has been added", name))
 	}
 	g.namedDict[name] = m
 	g.dict = append(g.dict, m)
+	g.mutex.Unlock()
+	g.log.Println("bootloader: AddByName", m.Path(), "named:", name)
+	if g.OnAfterAdded != nil {
+		g.OnAfterAdded(m)
+	}
 }
 
 func (g *group) AddByType(m *wrappedModule) {
+	if g.OnBeforeAdding != nil {
+		g.OnBeforeAdding(m)
+	}
+	g.mutex.Lock()
 	g.dict = append(g.dict, m)
+	g.mutex.Unlock()
+	g.log.Println("bootloader: AddByType", m.Path())
+	if g.OnAfterAdded != nil {
+		g.OnAfterAdded(m)
+	}
+}
+
+func (g *group) FindByName(name string) *wrappedModule {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
+	return g.findByName(name)
 }
 
 func (g *group) findByName(name string) *wrappedModule {
 	return g.namedDict[name]
 }
 
+func (g *group) FindByType(tp reflect.Type) *wrappedModule {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
+	return g.findByType(tp)
+}
+
 func (g *group) findByType(tp reflect.Type) *wrappedModule {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
 	for _, m := range g.dict {
 		if m.rt == tp {
 			return m
@@ -49,51 +105,9 @@ func (g *group) findByType(tp reflect.Type) *wrappedModule {
 	return nil
 }
 
-func (g *group) InjectAll() {
-	for i := len(g.dict) - 1; i >= 0; i-- {
-		m := g.dict[i]
-		if m.TryInject() {
-			g.inject(m)
-		}
-	}
-}
-
-func (g *group) inject(m *wrappedModule) {
-	for i := len(m.Fields()) - 1; i >= 0; i-- {
-		f := m.Fields()[i]
-		g.injectField(m, f)
-	}
-}
-
-func (g *group) injectField(m *wrappedModule, f *wrappedField) {
-	defer func() {
-		if err := recover(); err != nil {
-			panic(fmt.Errorf("bootloader: Module %s, FiledName:%s, %v", m.Path(), f.name, err))
-		}
-		if g.afterInjectHook != nil {
-			g.afterInjectHook(m, f)
-		}
-	}()
-	if g.beforeInjectHook != nil {
-		g.beforeInjectHook(m, f)
-	}
-	if f.tag == structTagAutoVal {
-		m := g.findByType(f.rt)
-		if m == nil {
-			panic(fmt.Errorf("bootloader: Module %s, FiledName:%s, Type not found", m.Path(), f.name))
-		} else {
-			f.SetValue(m.rv)
-		}
-	} else {
-		// Tag may be property
-		m := g.findByName(f.tag)
-		if m != nil {
-			f.SetValue(m.rv)
-		}
-	}
-}
-
 func (g *group) Verify() {
+	g.mutex.RLock()
+	defer g.mutex.RUnlock()
 	for i := len(g.dict) - 1; i >= 0; i-- {
 		m := g.dict[i]
 		m.MustInject()
@@ -101,5 +115,21 @@ func (g *group) Verify() {
 }
 
 func (g *group) List() []*wrappedModule {
-	return g.dict
+	g.mutex.RLock()
+	var copied = make([]*wrappedModule, len(g.dict))
+	n := copy(copied, g.dict)
+	g.mutex.RUnlock()
+	return copied[:n]
+}
+
+func (g *group) ForEach(fn func(x interface{})) []*wrappedModule {
+	g.mutex.RLock()
+	var copied = make([]*wrappedModule, 0, len(g.dict))
+	n := copy(copied, g.dict)
+	g.mutex.RUnlock()
+	copied = copied[:n]
+	for i := len(copied) - 1; i >= 0; i-- {
+		fn(copied[i].rv.Interface())
+	}
+	return copied
 }
