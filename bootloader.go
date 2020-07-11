@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"testing"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -62,6 +63,7 @@ type Bootloader interface {
 	MuestGetProperty(name string) interface{}
 	Launch() error
 	TestUnit(fn func() error) error
+	AssertNil(t *testing.T, fn func() error)
 	Run() error
 	Wait() error
 	Shutdown() error
@@ -278,4 +280,10 @@ func (loader *bootloader) Shutdown() error {
 		loader.cancel()
 	}
 	return nil
+}
+
+func (loader *bootloader) AssertNil(t *testing.T, fn func() error) {
+	if err := loader.run(fn); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -1,5 +1,7 @@
 package bootloader
 
+import "testing"
+
 var global = newBootloader()
 
 func Global() Bootloader {
@@ -60,4 +62,8 @@ func ShowLog(b bool) {
 
 func Shutdown() error {
 	return global.Shutdown()
+}
+
+func AssertNil(t *testing.T, fn func() error) {
+	global.AssertNil(t, fn)
 }
