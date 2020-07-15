@@ -90,8 +90,6 @@ func (g *group) FindByType(tp reflect.Type) *wrappedModule {
 }
 
 func (g *group) findByType(tp reflect.Type) *wrappedModule {
-	g.mutex.RLock()
-	defer g.mutex.RUnlock()
 	for _, m := range g.dict {
 		if m.rt == tp {
 			return m
