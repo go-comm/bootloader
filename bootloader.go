@@ -133,6 +133,7 @@ func (loader *bootloader) AddByAuto(x interface{}) error {
 	wrapped := newWrappedModule(m)
 	wrapped.log = loader.log
 	loader.g.AddByType(wrapped)
+	loader.h.Inject(wrapped)
 	return nil
 }
 
@@ -144,6 +145,7 @@ func (loader *bootloader) Add(name string, x interface{}) error {
 	wrapped := newWrappedModule(m)
 	wrapped.log = loader.log
 	loader.g.AddByName(name, wrapped)
+	loader.h.Inject(wrapped)
 	return nil
 }
 
