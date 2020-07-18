@@ -59,8 +59,6 @@ func (p *properties) walk(dot string, data reflect.Value) {
 				p.walk(name, v)
 			}
 		}
-	} else if data.Kind() == reflect.Interface {
-		p.walk(dot, reflect.ValueOf(data.Interface()))
 	}
 }
 
