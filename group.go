@@ -36,12 +36,12 @@ func (g *group) SetIgnores(name ...string) error {
 	return nil
 }
 
-func (g *group) AddByName(name string, m *wrappedModule) {
+func (g *group) AddByName(name string, m *wrappedModule) bool {
 	g.mutex.RLock()
 	_, ignore := g.ignores[name]
 	g.mutex.RUnlock()
 	if ignore {
-		return
+		return false
 	}
 	if g.OnBeforeAdding != nil {
 		g.OnBeforeAdding(m)
@@ -58,9 +58,10 @@ func (g *group) AddByName(name string, m *wrappedModule) {
 	if g.OnAfterAdded != nil {
 		g.OnAfterAdded(m)
 	}
+	return true
 }
 
-func (g *group) AddByType(m *wrappedModule) {
+func (g *group) AddByType(m *wrappedModule) bool {
 	if g.OnBeforeAdding != nil {
 		g.OnBeforeAdding(m)
 	}
@@ -71,6 +72,7 @@ func (g *group) AddByType(m *wrappedModule) {
 	if g.OnAfterAdded != nil {
 		g.OnAfterAdded(m)
 	}
+	return true
 }
 
 func (g *group) FindByName(name string) *wrappedModule {
